@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, wait
-from itertools import repeat
 import multiprocessing
 from pathlib import Path
 import signal
@@ -73,9 +72,8 @@ class ExtractorNoChapterBase(ABC):
             print('收到中斷訊號，將結束程式')
         self.is_interrupted = True
 
-    @abstractmethod
-    def show_help(self, login, bought, search):
-        """Show help text
+    def create_help(self, login, bought, search):
+        """Create help text
 
         :param login: Instructions for login. Will not be displayed if it evaluates to False
         :type login: str
@@ -94,7 +92,12 @@ class ExtractorNoChapterBase(ABC):
         text += f'''{sys.argv[0]} dl [-o 下載位置] COMIC_ID ...
     下載漫畫。COMIC_ID為漫畫的ID。可指定多個COMIC_ID
 '''
-        print(text)
+        return text
+
+    @abstractmethod
+    def show_help(self):
+        """Show help text, can use create_help() to make help text"""
+        pass
 
     def str_to_index(self, string, length):
         """Convert user input string to index of chapter list
@@ -240,7 +243,7 @@ class ExtractorNoChapterBase(ABC):
                 ext = Path(image_request.url.path).suffix
                 # Fix Kuaikan and Kakao extension
                 if ext == '.h' or ext == '.cef':
-                    ext = Path(Path(image_name).stem).suffix
+                    ext = Path(Path(image_request.url.path).stem).suffix
                 if not ext:
                     ext = '.jpg'
             filename = Path(path, str(idx).zfill(3) + ext)
@@ -353,12 +356,11 @@ class ExtractorNoChapterBase(ABC):
 
 class ExtractorBase(ExtractorNoChapterBase):
 
-    @abstractmethod
-    def show_help(self, login, bought, search, removed):
-        """Show help text
+    def create_help(self, login, bought, search, removed):
+        """Create help text
 
-        :param login: Instructions for login. Will not be displayed if it evaluates to False
-        :type login: str
+        :param login: Instructions for login. Will not be displayed if it is None
+        :type login: str | None
         :param bought: Whether to display instructions for bought comics
         :type bought: bool
         :param search: Whether to display instructions for searching comics
@@ -367,7 +369,7 @@ class ExtractorBase(ExtractorNoChapterBase):
         :type removed: bool
         """
         text = '用法：\n'
-        if login:
+        if login is not None:
             text += f'{sys.argv[0]} login {login}\n'
         if bought:
             text += f'''{sys.argv[0]} list-comic
@@ -394,7 +396,7 @@ class ExtractorBase(ExtractorNoChapterBase):
 {sys.argv[0]} dl-seq-removed [-o 下載位置] COMIC_ID ... INDEX
     依照章節序號下載下架漫畫。COMIC_ID為漫畫的ID，可指定多個COMIC_ID。INDEX為章節在list-bought-chapter中的序號，序號前加r代表反序。可使用-代表範圍，用,下載不連續章節。
 '''
-        print(text)
+        return text
 
     def arg_parse(self):
         """Parse sys.argv and do action"""
@@ -479,6 +481,7 @@ class ExtractorBase(ExtractorNoChapterBase):
                 try:
                     self.downloadRemovedChapter(sys.argv[2], chapter_id, location)
                 except Exception as e:
+                    print(traceback.format_exc())
                     print(f'章節 {chapter_id} 下載失敗：{e}')
         elif sys.argv[1] == 'dl-seq-removed' or sys.argv[1] == 'dl-all-removed':
             if sys.argv[1] == 'dl-all-removed':
@@ -506,6 +509,7 @@ class ExtractorBase(ExtractorNoChapterBase):
                     try:
                         self.downloadRemovedChapter(comic, chapter_id, location)
                     except Exception as e:
+                        print(traceback.format_exc())
                         print(f'章節 {chapter_id} 下載失敗：{e}')
         else:
             self.show_help()
@@ -631,6 +635,9 @@ class Chapter:
         self.title = title
         self.locked_status = locked_status
 
+    def __lt__(self, other):
+        return self.chapter_id < other.chapter_id
+
 class ImageDownload:
     """Class to pass download information to download_list()
 
@@ -665,9 +672,7 @@ class LockedStatus:
     free = 1
     unlocked = 2
     temp_unlocked = 3
-import hashlib
 import json
-import sys
 import urllib.parse
 
 from bs4 import BeautifulSoup
@@ -685,8 +690,8 @@ class Extractor(ExtractorBase):
         }
 
     def show_help(self):
-        super().show_help('''GLSC
-    在網頁版登錄，填入 glsc 這個 cookie''', True, True, False)
+        print(self.create_help('''GLSC
+    在網頁版登錄，填入 glsc 這個 cookie''', True, True, False))
 
     def getChapterList(self, comic_id):
         ret = []
@@ -756,13 +761,15 @@ class Extractor(ExtractorBase):
         j = json.loads(episode_json.attrs['data-value'])
         comic_title = j['readableProduct']['series']['title']
         chapter_title = j['readableProduct']['title']
-        number = j['readableProduct']['number']
-        image_download = ImageDownload(root, comic_title, f'{number:03} {chapter_title}')
+        number = str(j['readableProduct']['number']).zfill(3)
+        if chapter_id.startswith('volume/'):
+            number = 'Vol.' + number
+        image_download = ImageDownload(root, comic_title, f'{number} {chapter_title}')
         if not j['readableProduct']['pageStructure']:
             raise Exception('未解鎖')
         for page in j['readableProduct']['pageStructure']['pages']:
             if 'src' in page:
-                image_download.requests.append(httpx.Request('GET', page['src']))
+                image_download.requests.append(self.client.build_request('GET', page['src']))
         self.download_list(image_download)
 
         # Some images from android client are censored, so I use android website instead
@@ -781,7 +788,7 @@ class Extractor(ExtractorBase):
             number = j['current_volume']['number']
         image_download = ImageDownload(root, comic_title, f'{number:03} {chapter_title}')
         for i in j['image_uris']:
-            image_download.requests.append(httpx.Request('GET', i))
+            image_download.requests.append(self.client.build_request('GET', i))
         self.download_list(image_download)'''
 
     def getBoughtComicList(self):
