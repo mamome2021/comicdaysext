@@ -247,10 +247,13 @@ class ExtractorNoChapterBase(ABC):
                 if not ext:
                     ext = '.jpg'
             filename = Path(path, str(idx).zfill(3) + ext)
-            if filename.exists():
+            existing_index = [file.stem for file in Path(path).iterdir()]
+            if str(idx).zfill(3) in existing_index:
                 return
-
             r = self.send_request(image_request)
+            # Fix toptoontw
+            if ext == '.php' and r.headers['content-type'] == 'image/jpeg':
+                filename = Path(path, str(idx).zfill(3) + '.jpg')
             content = self.decrypt_image(r.content, idx, image_request.url, decrypt_info)
             with filename.open('wb') as f:
                 f.write(content)
@@ -685,7 +688,7 @@ class Extractor(ExtractorBase):
     def __init__(self):
         super().__init__()
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 15; 0; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/135.0.7049.100 Mobile Safari/537.36 ComicDaysAndroid/4.42.0',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 15; 0; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/138.0.7204.68 Mobile Safari/537.36 ComicDaysAndroid/4.51.0',
             'authorization': f'Bearer {self.token}'
         }
 
